@@ -1,62 +1,70 @@
-module Package (parse, Package, Module) where
+module Package exposing (parse, Package, Module)
 
-import Json.Decode as Json exposing ((:=))
+import Json.Decode as Json exposing (..)
 import List
 
 
-parse : List (String, String) -> Package
+parse : List ( String, String ) -> Package
 parse input =
-  List.map decode input |> List.concat
+    List.map decode input |> List.concat
 
 
-decode : (String, String) -> Package
-decode (name, json) =
-  case Json.decodeString (package name) json of
-    Ok v -> v
-    Err msg -> []
+decode : ( String, String ) -> Package
+decode ( _, json ) =
+    case decodeString (packageDecoder) json of
+        Ok package ->
+            package
+
+        Err msg ->
+            []
 
 
-type alias Package = List Module
+type alias Package =
+    List Module
+
+
+type alias Type =
+    { name : String
+    , cases : List String
+    }
 
 
 type alias Module =
-  { packageName : String
-  , name : String
-  , values : Values
-  }
+    { name : String
+    , aliases : List Value
+    , comment : String
+    , types : List Type
+    , values : List Value
+    }
 
 
-type alias Values =
-  { aliases : List Vs
-  , types : List (String, List String)
-  , values : List Vs
-  }
+type alias Value =
+    { name : String
+    , comment : String
+    , signature : String
+    }
 
 
-type alias Vs =
-  { name : String
-  , comment : String
-  , signature : String
-  }
+packageDecoder : Decoder Package
+packageDecoder =
+    let
+        oneValue =
+            map3 Value
+                (field "name" string)
+                (field "comment" string)
+                (field "type" string)
 
+        oneType =
+            map2 Type
+                (field "name" string)
+                (field "cases" (list string))
 
-package : String -> Json.Decoder Package
-package packageName =
-  let name = "name" := Json.string
-      v =
-        Json.object3 Vs
-          ("name" := Json.string)
-          ("comment" := Json.string)
-          ("type" := Json.string)
-
-      type' =
-        Json.object2 (,) name
-          ("cases" := Json.list (Json.tuple2 always Json.string Json.value))
-
-      values =
-        Json.object3 Values
-          ("aliases" := Json.list v)
-          ("types" := Json.list type')
-          ("values" := Json.list v)
-  in
-      Json.list (Json.object2 (Module packageName) name values)
+        oneModule =
+            map5 Module
+                (field "name" string)
+                (field "aliases" (list oneValue))
+                (field "comment" string)
+                (field "types" (list oneType))
+                (field "values" (list oneValue))
+    in
+        (list oneModule)

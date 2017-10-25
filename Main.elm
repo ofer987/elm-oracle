@@ -1,4 +1,4 @@
-module Main where
+module Main exposing (..)
 
 import Json.Encode as Encode
 import Json.Decode as Decode
@@ -8,13 +8,13 @@ import Console
 import File
 import Http
 import Path
-import Process
+import NodeProcess
 import Url
 
 import Oracle
 
-port main : Task String ()
-port main =
+main : Task String ()
+main =
   case parsedArgs of
     Help ->
       Console.log usage
@@ -22,16 +22,17 @@ port main =
     Warn message ->
       emitError message
 
-    Search sourceFile query ->
-      tryCatch emitError <|
-        loadSource sourceFile
-          `andThen` \source -> loadDeps
-          `andThen` \deps -> Task.fromResult (parseDeps deps)
-          `andThen` \docPaths -> downloadDocs docPaths
-          `andThen` \_ -> loadDocs docPaths
-          --`andThen` \depsDocs -> getProjectDocs
-          --`andThen` \projectDocs -> Task.succeed (projectDocs ++ depsDocs)
-          `andThen` \docs -> Console.log (Oracle.search query source docs)
+    Search query ->
+        let task = loadSource "foo"
+            |> andThen (\_ -> loadDeps)
+            |> andThen (\deps -> Task.fromResult (parseDeps deps))
+            |> andThen (\docPaths -> downloadDocs docPaths)
+            |> andThen (\_ -> loadDocs docPaths)
+            --`andThen` \depsDocs -> getProjectDocs
+            --`andThen` \projectDocs -> Task.succeed (projectDocs ++ depsDocs)
+            |> andThen (\docs -> Console.log (Oracle.search query source docs))
+        in
+          tryCatch emitError task
 
 
 usage : String
@@ -44,7 +45,7 @@ Available options:
   -h,--help                    Show this help text."""
 
 
-type Command = Help | Search String String | Warn String
+type Command = Help | Search String | Warn String
 
 
 parsedArgs : Command
@@ -52,21 +53,21 @@ parsedArgs =
   case Process.args of
     "-h" :: xs -> Help
     "--help" :: xs -> Help
-    x1 :: x2 :: xs -> Search x1 x2
-    x :: [] -> Warn "You did not supply a query."
+    x1 :: xs -> Search x1
+    _ :: [] -> Warn "You did not supply a query."
     [] -> Warn "You did not supply a source file or query."
 
 
 loadSource : String -> Task String String
 loadSource path =
   File.read (Path.normalize path)
-    `withError` ("Could not find the give source file: " ++ path)
+    |> withError ("Could not find the give source file: " ++ path)
 
 
 loadDeps : Task String String
 loadDeps =
   File.read (Path.resolve ["elm-stuff", "exact-dependencies.json"])
-    `withError` "Dependencies file is missing. Perhaps you need to run `elm-package install`?"
+      |> withError "Dependencies file is missing. Perhaps you need to run `elm-package install`?"
 
 
 type alias DocPaths = List { local : String, network : String, name : String }
@@ -90,17 +91,21 @@ parseDeps json =
 downloadDocs : DocPaths -> Task String (List ())
 downloadDocs =
   let test path =
-        (File.lstat path `andThen` \_ -> Task.succeed ()) `withError` path
+        File.lstat path 
+            |> andThen (\_ -> Task.succeed ())
+            |> withError path
 
       pull path =
-        Http.get path `withError` ("Could not download docs from " ++ path)
+        Http.get path 
+            |> withError ("Could not download docs from " ++ path)
 
       write path data =
-        File.write path data `withError` ("Could not download docs to " ++ path)
+        File.write path data 
+            |> withError ("Could not download docs to " ++ path)
 
       download path =
         test path.local
-          `onError` \_ -> pull path.network `andThen` write path.local
+            |> onError (\_ -> pull path.network |> andThen write path.local)
 
   in
       Task.sequence << List.map download
@@ -109,8 +114,8 @@ downloadDocs =
 loadDocs : DocPaths -> Task String (List (String, String))
 loadDocs =
   let load path =
-        (File.read path.local `andThen` (Task.succeed << (,) path.name))
-          `withError` ("Could not load docs from " ++ path.local)
+        (File.read path.local |> andThen (Task.succeed << (,) path.name))
+            |> withError ("Could not load docs from " ++ path.local)
   in
       Task.sequence << List.map load
 
@@ -120,16 +125,16 @@ getProjectDocs =
   let path = Path.resolve ["elm-stuff", "documentation.json"]
 
       generate =
-        Process.exec ("elm-make Main.elm --docs " ++ path)
-          `withError` "Failed to generate local project docs."
+        NodeProcess.exec ("elm-make Main.elm --docs " ++ path)
+            |> withError "Failed to generate local project docs."
 
       load =
         File.read path
-          `withError` "Failed to load local project docs."
+            |> withError "Failed to load local project docs."
   in
       generate
-        `andThen` \_ -> load
-        `andThen` \docs -> Task.succeed [(path, docs)]
+          |> andThen (\_ -> load)
+          |> andThen (\docs -> Task.succeed [(path, docs)])
 
 
 emitError : String -> Task x ()
@@ -142,8 +147,8 @@ emitError message =
     Console.fatal json
 
 
-withError : Task x a -> y -> Task y a
-withError task error =
+withError : y -> Task x a -> Task y a
+withError error task =
   Task.mapError (\_ -> error) task
 
 
